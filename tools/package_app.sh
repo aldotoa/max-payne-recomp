@@ -52,6 +52,7 @@ mkdir -p "$DATA" "$(dirname "$LOG")"
 [ -f "$DATA/launch-options" ] || cat > "$DATA/launch-options" <<'OPT'
 # mphost options for Max Payne.app, on one line below (lines starting with # are ignored). Examples:
 #   --resolution 1920x1080      --game-mode windowed      --intro skip      --audio off
+#   --pad classic (controller layout; modern is the default)      --pad-look 900 (aim speed)      --pad-invert
 OPT
 OPTS=$(grep -v '^[[:space:]]*#' "$DATA/launch-options" | tr '\n' ' ')
 cd "$HERE"

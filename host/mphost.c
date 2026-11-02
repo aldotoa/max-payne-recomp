@@ -1602,6 +1602,7 @@ static void usage(void)
                     "       [--intro skip|play] [--game-mode fullscreen|windowed] [--capture DIR --capture-frames N,...]\n"
                     "       [--audio device|null|off] [--audio-wav FILE] [--input F:ACTION,...] [--anchor TEXT]\n"
                     "       [--anchor-frames N] [--view hor+|stretch] [--resolution WxH] [--sim-fps N]\n"
+                    "       [--pad modern|classic] [--pad-look N] [--pad-invert]\n"
                     "  --window: show the game in a Metal window and play it with keyboard and mouse (until the window\n"
                     "  is closed or --frames N); --capture: write those frames as MPD3 streams (frame_NNN.mpd3); --audio: sound\n"
                     "  on the default device (the default with --window), mixed silently in real time, or none; --input: scripted\n"
@@ -1610,7 +1611,9 @@ static void usage(void)
                     "  view on a wide back buffer, widened (Hor+, the default) or the game's 4:3 view stretched;\n"
                     "  --resolution: the display mode to run at, one the adapter offers (saved in the data dir's Video\n"
                     "  Settings, as the launcher's); --sim-fps: a virtual clock that advances 1/N s per frame (deterministic\n"
-                    "  runs at a chosen frame rate; sound off unless --audio is given, then cursors follow the mixer)\n");
+                    "  runs at a chosen frame rate; sound off unless --audio is given, then cursors follow the mixer); --pad: the game\n"
+                    "  controller's layout (host/gamepad.c), --pad-look its aim speed (px/s, default 1008), --pad-invert\n"
+                    "  vertical look inverted\n");
     exit(2);
 }
 
@@ -1622,6 +1625,8 @@ int main(int argc, char **argv)
     int window = 0, intro = -1, audio = -3;
     const char *game_mode = NULL, *audio_wav = NULL;
     uint32_t res_w = 0, res_h = 0;
+    int pad_modern = 1, pad_invert = 0;
+    double pad_look = 0;
     if (argc < 2)
         usage();
     g_game_dir = argv[1];
@@ -1691,13 +1696,24 @@ int main(int argc, char **argv)
             if (n < 1 || n > 1000)
                 usage();
             host_clock_sim((unsigned)n);
-        } else if (!strcmp(argv[i], "--dump-images") && i + 1 < argc)
+        } else if (!strcmp(argv[i], "--pad") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (strcmp(v, "modern") && strcmp(v, "classic"))
+                usage();
+            pad_modern = !strcmp(v, "modern");
+        } else if (!strcmp(argv[i], "--pad-look") && i + 1 < argc) {
+            if ((pad_look = atof(argv[++i])) <= 0)
+                usage();
+        } else if (!strcmp(argv[i], "--pad-invert"))
+            pad_invert = 1;
+        else if (!strcmp(argv[i], "--dump-images") && i + 1 < argc)
             dump_dir = argv[++i];
         else
             usage();
     }
     if (!libpath)
         usage();
+    gamepad_config(pad_modern, pad_look, pad_invert);
     g_intro_skip = intro >= 0 ? intro : !window;    /* run_init.py: the intro plays with a window, else is skipped */
     if (audio == -3)                            /* run_init.py: sound with a window, none otherwise; a WAV needs a mixer */
         audio = window && !host_clock_sim_fps() ? 1 : -2;

@@ -209,6 +209,14 @@ int host_live_pump_frame(void);                      /* a frame starts: input to
 void host_live_pump(void);                           /* the window's events (input to the game) */
 void host_live_close(void);
 void host_settings_load(void);
+/* game controllers (gamepad.c): the layout (modern, else classic), the aim's top speed (px/s; 0: the default) and
+ * vertical inversion; SDL's gamepad events (added, removed), focus loss, and at a frame's start the pad's keys and
+ * buttons to the game and the right stick's motion added to *dx, *dy */
+union SDL_Event;
+void gamepad_config(int modern, double look, int invert);
+void gamepad_event(const union SDL_Event *ev);
+void gamepad_focus_lost(void);
+void gamepad_frame(double now, double *dx, double *dy);
 void host_settings_save(void);
 const char *host_settings_game_mode(void);
 void host_settings_set_game_mode(const char *mode);

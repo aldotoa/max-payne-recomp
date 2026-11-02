@@ -3,7 +3,7 @@ CC      = clang
 SDL    ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
 CFLAGS  = -O2 -Wall -Wextra -Wno-unused-parameter -std=gnu11 -I../lift/runtime -I$(SDL)/include
 OUT     = ../build
-SRC     = mphost.c hle_kernel32.c hle_files.c hle_user32.c hle_winsys.c hle_advapi32.c hle_d3d8.c hle_dshow.c hle_dinput.c hle_dsound.c live.c
+SRC     = mphost.c hle_kernel32.c hle_files.c hle_user32.c hle_winsys.c hle_advapi32.c hle_d3d8.c hle_dshow.c hle_dinput.c hle_dsound.c live.c gamepad.c
 all: $(OUT)/mphost
 
 $(OUT)/libmpmovie.dylib:
