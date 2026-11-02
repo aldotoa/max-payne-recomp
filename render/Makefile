@@ -6,14 +6,17 @@ OUT     = ../build
 FW      = -framework Foundation -framework Metal -framework QuartzCore -framework AppKit
 all: $(OUT)/libmprender.dylib $(OUT)/mpreplay
 
-$(OUT)/libmprender.dylib: mprender.m mprender.h
+$(OUT)/shaders.inc: shaders.metal
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -dynamiclib -install_name @rpath/libmprender.dylib -o $@ mprender.m $(FW)
+	xxd -i < shaders.metal > $@
+
+$(OUT)/libmprender.dylib: mprender.m mprender.h $(OUT)/shaders.inc
+	$(CC) $(CFLAGS) -I$(OUT) -dynamiclib -install_name @rpath/libmprender.dylib -o $@ mprender.m $(FW)
 
 $(OUT)/mpreplay: mpreplay.m mprender.h $(OUT)/libmprender.dylib
 	$(CC) $(CFLAGS) -o $@ mpreplay.m -L$(OUT) -lmprender -Wl,-rpath,@executable_path \
 	    -framework Foundation -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
 
 clean:
-	rm -f $(OUT)/libmprender.dylib $(OUT)/mpreplay
+	rm -f $(OUT)/libmprender.dylib $(OUT)/mpreplay $(OUT)/shaders.inc
 .PHONY: all clean
