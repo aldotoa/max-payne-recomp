@@ -87,6 +87,14 @@ set `MP_GAME_DIR`. It is listed in `.gitignore`, so it can't be committed by acc
   - `--intro skip`: skip the intro movies
   - `--audio off`: no sound
   - `--view stretch`: the original 4:3 view, stretched (the default is `hor+`)
+  - `--pad classic`: the controller's classic layout (the default is `modern`)
+  - `--pad-look 900`: the controller's aim speed (default 1008; lower is slower), `--pad-invert`: inverted look
+- Controllers: Xbox, PlayStation (DualShock 4, DualSense) and other pads macOS knows work over USB or Bluetooth.
+  The pad plays as keyboard and mouse with the default controls, in a modern third-person-shooter layout: left stick
+  move, right stick aim, RT fire, LT bullet time, RB shootdodge, A jump, B crouch, X reload, Y use (and select in
+  menus), D-pad left/right previous/next weapon, D-pad up painkiller, LB weapon category 6, Start the menu. LT needs a
+  one-time setup: in Options > Controls, select Bullet Time Toggle and press LT. `--pad classic` keeps the PC
+  controls' layout instead; both are listed at the top of `host/gamepad.c`.
 - Log: `~/Library/Logs/Max Payne Recomp.log`. If the game stops with an error, an alert shows the end of this log.
 
 From a checkout you can also run the game without building the app: `./play.sh [options]`.

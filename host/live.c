@@ -8,7 +8,7 @@
  * on Windows (mouse motion adds up). Mouse: while the window has focus and the game holds the mouse exclusively
  * (DISCL_EXCLUSIVE, acquired), the pointer is captured in relative mode and hidden; Cmd+Esc releases it until the next
  * click. Cmd+Return or Cmd+Ctrl+F toggles macOS fullscreen (remembered in launcher.json); the frame is scaled to fit
- * with its aspect kept. */
+ * with its aspect kept. A game controller plays as keyboard and mouse (host/gamepad.c). */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -144,7 +144,7 @@ static void set_fullscreen(int on, int remember)
  * before the device exists) */
 void host_live_open(void)
 {
-    if (!SDL_Init(SDL_INIT_VIDEO))
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
         host_fatal("SDL_Init: %s", SDL_GetError());
     uint32_t w = host_reg_dword(APP_VIDEO_SETTINGS, "Display Width", HOST_SCREEN_W);
     uint32_t h = host_reg_dword(APP_VIDEO_SETTINGS, "Display Height", HOST_SCREEN_H);
@@ -272,6 +272,11 @@ static void pump(int deliver_input)
         case SDL_EVENT_WINDOW_FOCUS_LOST:
             host_set_app_active(0);
             capture_mouse(0);
+            gamepad_focus_lost();
+            break;
+        case SDL_EVENT_GAMEPAD_ADDED:
+        case SDL_EVENT_GAMEPAD_REMOVED:
+            gamepad_event(&ev);
             break;
         case SDL_EVENT_MOUSE_MOTION:
             if (V.mouse_captured)
@@ -294,6 +299,12 @@ static void pump(int deliver_input)
     }
     update_capture();
     if (deliver_input) {
+        if (SDL_GetWindowFlags(V.window) & SDL_WINDOW_INPUT_FOCUS) {
+            double gx = 0, gy = 0;
+            gamepad_frame(now(), &gx, &gy);
+            if (V.mouse_captured)
+                V.dx += gx, V.dy += gy;
+        }
         int ix = (int)V.dx, iy = (int)V.dy;     /* (Python's int(): toward zero) */
         if (ix || iy) {
             host_mouse_move(ix, iy);
