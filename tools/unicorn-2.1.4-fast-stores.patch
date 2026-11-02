@@ -1,0 +1,138 @@
+diff --git a/qemu/accel/tcg/cputlb.c b/qemu/accel/tcg/cputlb.c
+index 3d0bebd..d395193 100644
+--- a/qemu/accel/tcg/cputlb.c
++++ b/qemu/accel/tcg/cputlb.c
+@@ -614,6 +614,15 @@ void tlb_flush_page_all_cpus_synced(CPUState *src, target_ulong addr)
+    can be detected */
+ void tlb_protect_code(struct uc_struct *uc, ram_addr_t ram_addr)
+ {
++    /*
++     * Unicorn patch: notdirty_write lets writes to a page without TBs go
++     * fast; once the page holds code, send its writes through notdirty
++     * again so self-modifying code is still caught.
++     */
++    if (uc->cpu) {
++        void *host = qemu_map_ram_ptr(uc, NULL, ram_addr & TARGET_PAGE_MASK);
++        tlb_reset_dirty(uc->cpu, (uintptr_t)host, TARGET_PAGE_SIZE);
++    }
+     cpu_physical_memory_test_and_clear_dirty(ram_addr, TARGET_PAGE_SIZE,
+                                              DIRTY_MEMORY_CODE);
+ }
+@@ -1195,11 +1204,12 @@ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
+ #endif
+     ram_addr_t ram_addr = mem_vaddr + iotlbentry->addr;
+     MemoryRegion *mr = cpu->uc->memory_mapping(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK));
++    bool has_code = false;
+ 
+     if (mr && (mr->perms & UC_PROT_EXEC) != 0) {
+         struct page_collection *pages
+             = page_collection_lock(cpu->uc, ram_addr, ram_addr + size);
+-        tb_invalidate_phys_page_fast(cpu->uc, pages, ram_addr, size, retaddr);
++        has_code = tb_invalidate_phys_page_fast(cpu->uc, pages, ram_addr, size, retaddr);
+         page_collection_unlock(pages);
+     }
+ 
+@@ -1209,8 +1219,8 @@ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
+     // - or doing snapshot
+     // , then never clean the tlb
+     if (!(!mr || (tlbe->addr_write != -1 && mr->priority < cpu->uc->snapshot_level)) &&
+-            !(tlbe->addr_code != -1) &&
+-            !uc_mem_hook_installed(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK))) {
++            !has_code &&
++            !uc_mem_hook_installed_mapped(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK))) {
+         tlb_set_dirty(cpu, mem_vaddr);
+     }
+ }
+diff --git a/qemu/accel/tcg/translate-all.c b/qemu/accel/tcg/translate-all.c
+index 71b6b2b..c8092bc 100644
+--- a/qemu/accel/tcg/translate-all.c
++++ b/qemu/accel/tcg/translate-all.c
+@@ -1838,11 +1838,11 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
+         phys_page2 = get_page_addr_code(env, virt_page2);
+     }
+ 
+-    /* Undoes tlb_set_dirty in notdirty_write. */
+-    if (!uc_mem_hook_installed(cpu->uc, tb->pc)) {
+-        tlb_reset_dirty_by_vaddr(cpu, pc & TARGET_PAGE_MASK,
+-                                (pc & ~TARGET_PAGE_MASK) + tb->size);
+-    }
++    /*
++     * Unicorn patch: tlb_set_dirty in notdirty_write is undone by
++     * tlb_protect_code, which tb_link_page calls when a page gets its
++     * first TB (covering both pages of a TB and every alias).
++     */
+ 
+     /*
+      * No explicit memory barrier is required -- tb_link_page() makes the
+@@ -2016,7 +2016,7 @@ void tb_invalidate_phys_range(struct uc_struct *uc, ram_addr_t start, ram_addr_t
+  *
+  * Call with all @pages in the range [@start, @start + len[ locked.
+  */
+-void tb_invalidate_phys_page_fast(struct uc_struct *uc, struct page_collection *pages,
++bool tb_invalidate_phys_page_fast(struct uc_struct *uc, struct page_collection *pages,
+                                   tb_page_addr_t start, int len,
+                                   uintptr_t retaddr)
+ {
+@@ -2026,7 +2026,7 @@ void tb_invalidate_phys_page_fast(struct uc_struct *uc, struct page_collection *
+ 
+     p = page_find(uc, start >> TARGET_PAGE_BITS);
+     if (!p) {
+-        return;
++        return false;
+     }
+ 
+     assert_page_locked(p);
+@@ -2048,6 +2048,7 @@ void tb_invalidate_phys_page_fast(struct uc_struct *uc, struct page_collection *
+         tb_invalidate_phys_page_range__locked(uc, pages, p, start, start + len,
+                                               retaddr);
+     }
++    return p->first_tb != (uintptr_t)NULL;
+ }
+ 
+ /* user-mode: call with mmap_lock held */
+diff --git a/qemu/accel/tcg/translate-all.h b/qemu/accel/tcg/translate-all.h
+index 30ce55d..c732b27 100644
+--- a/qemu/accel/tcg/translate-all.h
++++ b/qemu/accel/tcg/translate-all.h
+@@ -26,7 +26,8 @@
+ struct page_collection *page_collection_lock(struct uc_struct *uc, tb_page_addr_t start,
+                                              tb_page_addr_t end);
+ void page_collection_unlock(struct page_collection *set);
+-void tb_invalidate_phys_page_fast(struct uc_struct *uc, struct page_collection *pages,
++/* Unicorn: returns true if the page still holds translated code. */
++bool tb_invalidate_phys_page_fast(struct uc_struct *uc, struct page_collection *pages,
+                                   tb_page_addr_t start, int len,
+                                   uintptr_t retaddr);
+ void tb_invalidate_phys_page_range(struct uc_struct *uc, tb_page_addr_t start, tb_page_addr_t end);
+diff --git a/qemu/include/exec/exec-all.h b/qemu/include/exec/exec-all.h
+index 68c6567..3036aaa 100644
+--- a/qemu/include/exec/exec-all.h
++++ b/qemu/include/exec/exec-all.h
+@@ -477,6 +477,27 @@ address_space_translate_for_iotlb(CPUState *cpu, int asidx, hwaddr addr,
+ hwaddr memory_region_section_get_iotlb(CPUState *cpu,
+                                        MemoryRegionSection *section);
+ 
++/*
++ * Unicorn patch: like uc_mem_hook_installed but without the *_UNMAPPED
++ * hooks, which never fire for a page that has a TLB entry.
++ */
++static inline bool uc_mem_hook_installed_mapped(struct uc_struct *uc, hwaddr paddr)
++{
++    if (HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_READ, paddr))
++        return true;
++    if (HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_READ_PROT, paddr))
++        return true;
++    if (HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_FETCH_PROT, paddr))
++        return true;
++    if (HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_READ_AFTER, paddr))
++        return true;
++    if (HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_WRITE, paddr))
++        return true;
++    if (HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_WRITE_PROT, paddr))
++        return true;
++    return false;
++}
++
+ static inline bool uc_mem_hook_installed(struct uc_struct *uc, hwaddr paddr)
+ {
+     if (HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_FETCH_UNMAPPED, paddr))

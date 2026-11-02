@@ -1,0 +1,64 @@
+# MSVCRT.DLL entries lifted with the game (build.py --module MSVCRT.DLL --entries-file MSVCRT.DLL=...): bsearch,
+# qsort and their helpers, so the comparators the game passes stay native (H41); rand, _CIacos, free, malloc and
+# memmove with every function they call (H42). The SEH/setjmp machinery (lift-out/keep_crt.txt) is never listed.
+0x78001000  # memset
+0x78001055  # _lock
+0x780010b0
+0x78001181
+0x7800129c  # _unlock
+0x780012b1  # malloc
+0x780012c3
+0x780012e1
+0x78001385
+0x7800138e  # free
+0x78001436
+0x7800143f
+0x780016e4
+0x7800270e  # strlen
+0x78002787  # strcpy
+0x78002dde  # strcat
+0x78003524  # calloc
+0x78003600
+0x78003609
+0x78003857
+0x78003dab
+0x7800511e  # strncpy
+0x78005802  # memmove
+0x7800590b  # _callnewh
+0x7800b39b
+0x7800b8c3
+0x7800b8fc
+0x7800bad6  # _amsg_exit
+0x7800c97a  # _errno
+0x7800cc2b
+0x7800cca7
+0x7800ce95
+0x7800cfe5
+0x7800d010
+0x7800d35c
+0x7800d681
+0x7800d732
+0x7800dfba
+0x7800e010
+0x7800efde
+0x7801f0b2  # bsearch
+0x7801f230  # qsort
+0x7801f384
+0x7801f3d2
+0x7801f40b  # rand
+0x78028905  # _CIacos
+0x78028922
+0x7802c2aa
+0x7802c2ca
+0x7802c2e1
+0x7802c33d
+0x7802cb12
+0x7802cdf1
+0x7802d089
+0x7802d103
+0x7802d19a
+0x7802d25b
+0x7802d269
+0x7802d278
+0x7802d29b
+0x7802d303

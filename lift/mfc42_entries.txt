@@ -1,0 +1,20 @@
+# MFC42.DLL entries lifted with the game (build.py --module MFC42.DLL --entries-file MFC42.DLL=...): operator new
+# (#823, 0x5f403877) and operator delete (#825, 0x5f4038c0) with every function they call (H42).
+0x5f401000  # #3030
+0x5f40107d
+0x5f401083  # #1168
+0x5f4010ab  # #3028
+0x5f401109  # #1169
+0x5f40193e  # #1196
+0x5f4019af  # #1569
+0x5f401ff0
+0x5f403877  # #823
+0x5f4038c0  # #825
+0x5f406781  # #824
+0x5f4067b5  # #6184
+0x5f40689d  # #1000
+0x5f40fe2b  # #1118
+0x5f40fe65  # #546
+0x5f40fea6  # #1599
+0x5f451ddf
+0x5f452d46  # #1265

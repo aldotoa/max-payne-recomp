@@ -1,0 +1,9 @@
+# MSVCRT functions served by the native CRT helpers (lift/runtime/crt.c, emu/native.py CRT_HELPERS): not lifted
+0x7800b20f
+0x78028d47
+0x7801844e
+0x78001f14
+0x78010d13
+0x780139f6
+0x7802bbf0
+0x78011790

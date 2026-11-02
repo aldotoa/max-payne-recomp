@@ -1,0 +1,28 @@
+# Game files and anything derived from them must never be committed
+Max Payne/
+*.ras
+*.exe
+*.dll
+*.mpg
+# Generated output of the lifter / analysis databases
+build/
+lift-out/
+build-lift/
+*.gpr
+*.rep
+.DS_Store
+.venv/
+census/
+emu_data/
+__pycache__/
+*.pyc
+captures/
+.venv-build/
+.pytest_cache/
+.claude/
+dist/
+*.app
+*.dmg
+*.dylib
+*.o
+*.obj/

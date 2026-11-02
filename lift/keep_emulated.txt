@@ -1,0 +1,3 @@
+# Functions that stay in the emulator (lift/build.py --keep-emulated-file). One VA per line, at the emulator's
+# load base (lift/modbases.py). setjmp/longjmp users (G_Image::loadJPG and its _setjmp3 thunk) are kept
+# automatically (build.py SETJMP), so they are not listed here.

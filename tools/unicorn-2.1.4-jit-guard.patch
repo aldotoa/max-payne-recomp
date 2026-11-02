@@ -1,0 +1,29 @@
+diff --git a/qemu/include/tcg/tcg-apple-jit.h b/qemu/include/tcg/tcg-apple-jit.h
+index 4ace2c7..2ba845c 100644
+--- a/qemu/include/tcg/tcg-apple-jit.h
++++ b/qemu/include/tcg/tcg-apple-jit.h
+@@ -112,11 +112,16 @@ static inline void jit_write_protect(int enabled)
+     return pthread_jit_write_protect_np(enabled);
+ }
+ 
++// Unicorn patch: a callback can run nested uc_emu_start calls, which change both the thread's JIT mode and
++// uc->current_executable (the cached mode tb_exec_lock/unlock trust). Restore both, so the cache matches the
++// thread again; restoring only the thread left a stale cache after an interrupt hook ran nested code, and the
++// next TB ran with the JIT area still writable (EXC_BAD_ACCESS on Apple Silicon).
+ #define JIT_CALLBACK_GUARD(x)                       \
+ {                                                   \
+     bool executable = uc->current_executable;       \
+     assert_executable(executable);                  \
+     x;                                              \
++    uc->current_executable = executable;            \
+     jit_write_protect(executable);                  \
+ }                                                   \
+ 
+@@ -126,6 +131,7 @@ static inline void jit_write_protect(int enabled)
+     bool executable = uc->current_executable;           \
+     assert_executable(executable);                      \
+     var = x;                                            \
++    uc->current_executable = executable;                \
+     jit_write_protect(executable);                      \
+ }                                                       \
+ 

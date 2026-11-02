@@ -1,0 +1,322 @@
+diff --git a/include/uc_priv.h b/include/uc_priv.h
+index c3132dc..b7c5441 100644
+--- a/include/uc_priv.h
++++ b/include/uc_priv.h
+@@ -250,8 +250,16 @@ typedef enum uc_hook_idx {
+      !((hh)->to_delete))
+ 
+ #define HOOK_EXISTS(uc, idx) ((uc)->hook[idx##_IDX].head != NULL)
++// Single-address UC_HOOK_CODE hooks (begin == end) are indexed by address
++// instead of being walked on hook[UC_HOOK_CODE_IDX]; see uc.c.
++bool hook_code_addr_any(uc_engine *uc);
++bool hook_code_exists_bounded(uc_engine *uc, uint64_t addr);
++void hooked_code_addr_regions(uc_engine *uc, uint64_t start, uint64_t length);
++
+ #define HOOK_EXISTS_BOUNDED(uc, idx, addr)                                     \
+-    _hook_exists_bounded((uc)->hook[idx##_IDX].head, addr)
++    ((idx##_IDX == UC_HOOK_CODE_IDX)                                           \
++         ? hook_code_exists_bounded(uc, addr)                                  \
++         : _hook_exists_bounded((uc)->hook[idx##_IDX].head, addr))
+ 
+ static inline bool _hook_exists_bounded(struct list_item *cur, uint64_t addr)
+ {
+@@ -361,7 +369,11 @@ struct uc_struct {
+     // linked lists containing hooks per type
+     struct list hook[UC_HOOK_MAX];
+     struct list hooks_to_del;
+-    int hooks_count[UC_HOOK_MAX];
++    int hooks_count[UC_HOOK_MAX]; // includes the single-address code hooks
++
++    // single-address UC_HOOK_CODE hooks, keyed by address; the value is a
++    // struct list of the hooks at that address (created on demand)
++    GHashTable *code_addr_hooks;
+ 
+     // hook to count number of instructions for uc_emu_start()
+     uc_hook count_hook;
+@@ -517,6 +529,7 @@ static inline void hooked_regions_check(uc_engine *uc, uint64_t start,
+ {
+     // Only UC_HOOK_BLOCK and UC_HOOK_CODE might be wrongle cached!
+     hooked_regions_check_single(uc->hook[UC_HOOK_CODE_IDX].head, start, length);
++    hooked_code_addr_regions(uc, start, length);
+     hooked_regions_check_single(uc->hook[UC_HOOK_BLOCK_IDX].head, start,
+                                 length);
+ }
+diff --git a/qemu/include/tcg/tcg-op.h b/qemu/include/tcg/tcg-op.h
+index 93026d1..7a42f51 100644
+--- a/qemu/include/tcg/tcg-op.h
++++ b/qemu/include/tcg/tcg-op.h
+@@ -47,7 +47,10 @@ static inline void gen_uc_tracecode(TCGContext *tcg_ctx, int32_t size, int32_t t
+     };
+ 
+     const int hook_type = type & UC_HOOK_IDX_MASK;
+-    if (puc->hooks_count[hook_type] == 1 && !(type & UC_HOOK_FLAG_NO_STOP)) {
++    // the inline path walks hook[] only, so it must not be used while an
++    // address-indexed code hook exists
++    if (puc->hooks_count[hook_type] == 1 && !(type & UC_HOOK_FLAG_NO_STOP) &&
++        !(hook_type == UC_HOOK_CODE_IDX && hook_code_addr_any(puc))) {
+         cur = puc->hook[hook_type].head;
+         
+         while (cur) {
+diff --git a/uc.c b/uc.c
+index 75b89a0..34bec5a 100644
+--- a/uc.c
++++ b/uc.c
+@@ -111,6 +111,134 @@ static void hook_delete(void *data)
+     }
+ }
+ 
++// Single-address UC_HOOK_CODE hooks (begin == end) are indexed by address in
++// uc->code_addr_hooks, so that translation and helper_uc_tracecode do not walk
++// every such hook for each instruction. They are not on hook[UC_HOOK_CODE_IDX],
++// which keeps the ranged code hooks (and the instruction counter). A bucket is a
++// struct list of the hooks at one address that uses hook_delete for its entries.
++static guint code_addr_hash(gconstpointer key)
++{
++    uint64_t addr = *(const uint64_t *)key;
++
++    return (guint)(addr ^ (addr >> 32));
++}
++
++static gboolean code_addr_equal(gconstpointer a, gconstpointer b)
++{
++    return *(const uint64_t *)a == *(const uint64_t *)b;
++}
++
++static struct list *code_addr_bucket(uc_engine *uc, uint64_t addr)
++{
++    if (uc->code_addr_hooks == NULL) {
++        return NULL;
++    }
++    return g_hash_table_lookup(uc->code_addr_hooks, &addr);
++}
++
++static void *code_addr_insert(uc_engine *uc, struct hook *hook)
++{
++    struct list *bucket = code_addr_bucket(uc, hook->begin);
++    uint64_t *key;
++
++    if (bucket != NULL) {
++        return hook_append(bucket, hook);
++    }
++
++    if (uc->code_addr_hooks == NULL) {
++        uc->code_addr_hooks = g_hash_table_new_full(
++            code_addr_hash, code_addr_equal, g_free, NULL);
++    }
++    key = malloc(sizeof(*key));
++    bucket = list_new();
++    if (key == NULL || bucket == NULL) {
++        free(key);
++        free(bucket);
++        return NULL;
++    }
++    *key = hook->begin;
++    bucket->delete_fn = hook_delete;
++    g_hash_table_insert(uc->code_addr_hooks, key, bucket);
++
++    return hook_append(bucket, hook);
++}
++
++// removes the hook from its address bucket, if it is in one
++static void code_addr_remove(uc_engine *uc, struct hook *hook)
++{
++    uint64_t addr = hook->begin;
++    struct list *bucket = code_addr_bucket(uc, addr);
++
++    if (bucket == NULL || !list_remove(bucket, (void *)hook)) {
++        return;
++    }
++    if (bucket->head == NULL) {
++        g_hash_table_remove(uc->code_addr_hooks, &addr);
++        free(bucket);
++    }
++}
++
++static void code_addr_free_bucket(gpointer key, gpointer value, gpointer opaq)
++{
++    struct list *bucket = (struct list *)value;
++
++    list_clear(bucket);
++    free(bucket);
++}
++
++struct code_addr_find {
++    struct hook *hook;
++    bool found;
++};
++
++static void code_addr_find_bucket(gpointer key, gpointer value, gpointer opaq)
++{
++    struct code_addr_find *find = (struct code_addr_find *)opaq;
++
++    if (!find->found && list_exists((struct list *)value, (void *)find->hook)) {
++        find->found = true;
++    }
++}
++
++// true if the hook is an address-indexed code hook; only compares pointers
++static bool code_addr_contains(uc_engine *uc, struct hook *hook)
++{
++    struct code_addr_find find = {hook, false};
++
++    if (uc->code_addr_hooks != NULL) {
++        g_hash_table_foreach(uc->code_addr_hooks, code_addr_find_bucket, &find);
++    }
++    return find.found;
++}
++
++bool hook_code_addr_any(uc_engine *uc)
++{
++    return uc->code_addr_hooks != NULL &&
++           g_hash_table_size(uc->code_addr_hooks) > 0;
++}
++
++// like HOOK_EXISTS_BOUNDED(uc, UC_HOOK_CODE, addr), for the whole code hook set
++bool hook_code_exists_bounded(uc_engine *uc, uint64_t addr)
++{
++    struct list *bucket;
++
++    if (_hook_exists_bounded(uc->hook[UC_HOOK_CODE_IDX].head, addr)) {
++        return true;
++    }
++    bucket = code_addr_bucket(uc, addr);
++    return bucket != NULL && _hook_exists_bounded(bucket->head, addr);
++}
++
++// the hooked-region bookkeeping of hooked_regions_check() for the code hooks
++void hooked_code_addr_regions(uc_engine *uc, uint64_t start, uint64_t length)
++{
++    struct list *bucket = code_addr_bucket(uc, start);
++
++    if (bucket != NULL) {
++        hooked_regions_check_single(bucket->head, start, length);
++    }
++}
++
+ UNICORN_EXPORT
+ unsigned int uc_version(unsigned int *major, unsigned int *minor)
+ {
+@@ -563,6 +691,12 @@ uc_err uc_close(uc_engine *uc)
+         list_clear(&uc->hook[i]);
+     }
+ 
++    if (uc->code_addr_hooks != NULL) {
++        g_hash_table_foreach(uc->code_addr_hooks, code_addr_free_bucket, NULL);
++        g_hash_table_destroy(uc->code_addr_hooks);
++        uc->code_addr_hooks = NULL;
++    }
++
+     free(uc->mapped_blocks);
+ 
+     g_tree_destroy(uc->ctl_exits);
+@@ -1067,6 +1201,7 @@ static void clear_deleted_hooks(uc_engine *uc)
+                 break;
+             }
+         }
++        code_addr_remove(uc, hook);
+     }
+ 
+     list_clear(&uc->hooks_to_del);
+@@ -2003,7 +2138,13 @@ uc_err uc_hook_add(uc_engine *uc, uc_hook *hh, int type, void *callback,
+         if ((type >> i) & 1) {
+             // TODO: invalid hook error?
+             if (i < UC_HOOK_MAX) {
+-                if (uc->hook_insert) {
++                if (i == UC_HOOK_CODE_IDX && begin == end) {
++                    if (code_addr_insert(uc, hook) == NULL) {
++                        free(hook);
++                        restore_jit_state(uc);
++                        return UC_ERR_NOMEM;
++                    }
++                } else if (uc->hook_insert) {
+                     if (hook_insert(&uc->hook[i], hook) == NULL) {
+                         free(hook);
+                         restore_jit_state(uc);
+@@ -2037,6 +2178,7 @@ uc_err uc_hook_del(uc_engine *uc, uc_hook hh)
+ {
+     int i;
+     struct hook *hook = (struct hook *)hh;
++    bool live_addr_hook;
+ 
+     UC_INIT(uc);
+ 
+@@ -2045,6 +2187,8 @@ uc_err uc_hook_del(uc_engine *uc, uc_hook hh)
+     // which is less efficient
+     // an optimization would be to align the hook pointer
+     // and store the type mask in the hook pointer.
++    // Address-indexed code hooks are found by pointer, too (see code_addr_insert)
++    live_addr_hook = code_addr_contains(uc, hook) && !hook->to_delete;
+     for (i = 0; i < UC_HOOK_MAX; i++) {
+         if (list_exists(&uc->hook[i], (void *)hook)) {
+             g_hash_table_foreach(hook->hooked_regions, hook_invalidate_region,
+@@ -2055,6 +2199,16 @@ uc_err uc_hook_del(uc_engine *uc, uc_hook hh)
+             hook_append(&uc->hooks_to_del, hook);
+         }
+     }
++    if (live_addr_hook) {
++        uc->hooks_count[UC_HOOK_CODE_IDX]--;
++        if (!hook->to_delete) {
++            g_hash_table_foreach(hook->hooked_regions, hook_invalidate_region,
++                                 uc);
++            g_hash_table_remove_all(hook->hooked_regions);
++            hook->to_delete = true;
++            hook_append(&uc->hooks_to_del, hook);
++        }
++    }
+ 
+     restore_jit_state(uc);
+     return UC_ERR_OK;
+@@ -2094,6 +2248,39 @@ void helper_uc_traceopcode(struct hook *hook, uint64_t arg1, uint64_t arg2,
+     }
+ }
+ 
++// The address-indexed code hooks at one address, run after the ranged code hooks
++// of helper_uc_tracecode (the ranged hooks keep their order, the indexed ones
++// keep theirs). Same to_delete and stop_request rules as the list loop.
++static void code_addr_dispatch(uc_engine *uc, int64_t address, int32_t size,
++                               bool not_allow_stop)
++{
++    struct list *bucket = code_addr_bucket(uc, (uint64_t)address);
++    struct list_item *cur;
++    struct hook *hook;
++
++    if (bucket == NULL) {
++        return;
++    }
++
++    for (cur = bucket->head; cur != NULL && (hook = (struct hook *)cur->data);
++         cur = cur->next) {
++        if (hook->to_delete) {
++            continue;
++        }
++
++        if (HOOK_BOUND_CHECK(hook, (uint64_t)address)) {
++            JIT_CALLBACK_GUARD(((uc_cb_hookcode_t)hook->callback)(
++                uc, address, size, hook->user_data));
++        }
++
++        if (not_allow_stop && uc->stop_request) {
++            revert_uc_emu_stop(uc);
++        } else if (!not_allow_stop && uc->stop_request) {
++            break;
++        }
++    }
++}
++
+ void helper_uc_tracecode(int32_t size, uc_hook_idx index, void *handle,
+                          int64_t address);
+ void helper_uc_tracecode(int32_t size, uc_hook_idx index, void *handle,
+@@ -2162,6 +2349,13 @@ void helper_uc_tracecode(int32_t size, uc_hook_idx index, void *handle,
+             break;
+         }
+     }
++
++    // the ranged loop above ends without a stop request, unless it was allowed
++    // to be stopped (not_allow_stop reverts it)
++    if (index == UC_HOOK_CODE_IDX && hook_code_addr_any(uc) &&
++        !(uc->stop_request && !not_allow_stop)) {
++        code_addr_dispatch(uc, address, size, not_allow_stop);
++    }
+ }
+ 
+ UNICORN_EXPORT

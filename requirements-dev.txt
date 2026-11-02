@@ -1,0 +1,6 @@
+# Development: the emulator (emu/), the tests and the analysis tools. Unicorn should be the patched build
+# from tools/build_unicorn.sh for speed (the stock wheel is about 2x slower).
+-r requirements.txt
+unicorn==2.1.4
+numpy
+pytest

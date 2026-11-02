@@ -1,0 +1,20 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  build-and-test:
+    runs-on: macos-14            # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install SDL3
+        run: brew install sdl3
+      - name: Build the host
+        run: make -C host
+      - name: Python packages
+        run: pip install -r requirements-dev.txt
+      - name: Tests that need no game files
+        run: python -m pytest -q lift/test_ops_alu.py lift/test_ops_misc.py lift/test_ops_string.py lift/test_functions.py lift/test_build.py emu/test_parse_va.py
+      - name: Packaging script syntax
+        run: sh -n make-app.sh && sh -n tools/package_app.sh
